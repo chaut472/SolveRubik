@@ -63,7 +63,8 @@ class MainWindow(QMainWindow):
         # Bộ điều khiển bước giải
         self.step_controller = StepGuideController(self)
         self.step_controller.step_changed.connect(self._on_step_changed)
-        self.step_controller.cube_state_changed.connect(self._on_cube_updated_by_player)
+        self.step_controller.move_executed.connect(self._on_move_executed)
+        self.step_controller.state_reset.connect(self._on_state_reset)
         self.step_controller.playback_finished.connect(self._on_playback_finished)
 
         self._setup_ui()
@@ -173,6 +174,7 @@ class MainWindow(QMainWindow):
         self.cube_net = CubeNetWidget(self.cube_state, self)
         self.cube_net.sticker_clicked.connect(self._on_net_sticker_clicked)
         self.tabs_view.addTab(self.cube_net, "🗺️ Mô Hình 2D (Trải Phẳng)")
+        self.tabs_view.currentChanged.connect(self._on_tab_changed)
 
         right_layout.addWidget(self.tabs_view, stretch=5)
 
@@ -422,6 +424,29 @@ class MainWindow(QMainWindow):
 
     # ================== TRÌNH PHÁT BƯỚC GIẢI (SOLUTION PLAYER) ==================
 
+    def _on_tab_changed(self, index: int) -> None:
+        """Đồng bộ trạng thái khi chuyển giữa Tab 3D và 2D."""
+        if index == 0:  # Chuyển sang Tab 3D
+            cur = self.step_controller.current_cube if self.step_controller.total_steps > 0 else self.cube_state
+            self.cube_3d.set_cube_state(cur)
+
+    @Slot(str, CubeState)
+    def _on_move_executed(self, move: str, target_cube: CubeState) -> None:
+        """Kích hoạt khi 1 nước đi vừa được thực hiện trong quá trình giải."""
+        # 1. Cập nhật ngay trên mô hình 2D
+        self.cube_net.set_cube_state(target_cube)
+
+        # 2. Diễn hoạt xoay 3D mượt mà và cập nhật màu chính xác tuyệt đối
+        speed_val = self.slider_speed.value()
+        anim_duration = max(160, int(speed_val * 0.55))
+        self.cube_3d.animate_move(move, anim_duration, target_cube)
+
+    @Slot(CubeState)
+    def _on_state_reset(self, target_cube: CubeState) -> None:
+        """Kích hoạt khi nạp lại trạng thái tĩnh (reset hoặc nhảy bước)."""
+        self.cube_net.set_cube_state(target_cube)
+        self.cube_3d.set_cube_state(target_cube)
+
     @Slot(object, int, int)
     def _on_step_changed(self, step_info: Optional[StepInfo], current_idx: int, total_steps: int) -> None:
         if total_steps == 0:
@@ -435,29 +460,17 @@ class MainWindow(QMainWindow):
         if 0 <= current_idx < self.list_moves.count():
             self.list_moves.setCurrentRow(current_idx)
 
-        cur_cube = self.step_controller.current_cube or self.cube_state
-
-        # Hiển thị nước đi lớn
+        # Hiển thị thông tin nước đi trên giao diện
         if step_info:
             self.lbl_big_move.setText(step_info.move)
             self.lbl_step_desc.setText(step_info.get_full_text())
-
-            # Kích hoạt diễn hoạt xoay 3D mượt mà
-            speed_val = self.slider_speed.value()
-            anim_duration = max(180, int(speed_val * 0.55))
-            self.cube_3d.animate_move(step_info.move, anim_duration, cur_cube)
         else:
-            self.cube_3d.set_cube_state(cur_cube)
             if current_idx >= total_steps:
                 self.lbl_big_move.setText("HOÀN THÀNH")
                 self.lbl_step_desc.setText("🎉 Chúc mừng! Khối Rubik đã được giải hoàn tất.")
             else:
                 self.lbl_big_move.setText("BẮT ĐẦU")
                 self.lbl_step_desc.setText("Nhấn 'Bước Tiếp' hoặc 'Tự Động' để bắt đầu giải.")
-
-    @Slot(CubeState)
-    def _on_cube_updated_by_player(self, cube: CubeState) -> None:
-        self.cube_net.set_cube_state(cube)
 
     def _toggle_auto_play(self) -> None:
         self.step_controller.toggle_play()

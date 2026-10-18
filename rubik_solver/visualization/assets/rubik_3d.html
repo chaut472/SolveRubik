@@ -64,11 +64,11 @@
     <div id="hud">
         <button class="hud-btn" onclick="resetCameraView()">🔄 Đặt Lại Góc Nhìn</button>
     </div>
-    <div id="info-overlay">Dùng chuột kéo để xoay 360° • Cuộn chuột để phóng to/thu nhỏ</div>
+    <div id="info-overlay">Kéo chuột trái để xoay 360° • Cuộn chuột để zoom</div>
     <div id="canvas-container"></div>
 
     <script>
-        // Bảng màu chuẩn quốc tế
+        // Bảng mã màu khớp 100% với COLOR_HEX trong constants.py
         const COLOR_MAP = {
             'W': 0xFFFFFF, // Up (Trắng)
             'Y': 0xFFD500, // Down (Vàng)
@@ -76,8 +76,8 @@
             'B': 0x0046AD, // Back (Xanh dương)
             'R': 0xB71234, // Right (Đỏ)
             'O': 0xFF5800, // Left (Cam)
-            '?': 0x334155, // Chưa xác định
-            'INTERNAL': 0x141416 // Mặt bên trong
+            '?': 0x3C3F41, // Chưa xác định
+            'INTERNAL': 0x141416 // Mặt trong khối Rubik
         };
 
         const SCENE_BG = 0x18191C;
@@ -85,22 +85,125 @@
         const CUBIE_GAP = 1.02;
 
         let scene, camera, renderer, controls;
-        let cubies = []; // 27 viên nhỏ
-        let pivot; // Group để xoay một lớp
+        let cubies = [];
+        let cubiesByCoord = {}; // Lookup dạng "x,y,z"
+        let pivot;
         let isAnimating = false;
-        let animationQueue = [];
+        let activeLayerCubies = [];
+        let currentAnimationId = null;
+        let latestColorString = "WWWWWWWWWRRRRRRRRRGGGGGGGGGYYYYYYYYYOOOOOOOOOBBBBBBBBB";
 
-        // Khởi tạo Three.js Scene
+        // Bảng ánh xạ chính xác 54 ô (Stickers) theo đúng thứ tự URFDLB (0..53)
+        // Material Index trong BoxGeometry của Three.js:
+        // 0: +X (Right)
+        // 1: -X (Left)
+        // 2: +Y (Up)
+        // 3: -Y (Down)
+        // 4: +Z (Front)
+        // 5: -Z (Back)
+        const STICKER_MAPPINGS = {
+            // Face U (0..8): y = +1, mặt +Y (mat: 2)
+            // Hàng 0 (z = -1, kề B): x = -1, 0, 1
+            // Hàng 1 (z =  0):       x = -1, 0, 1
+            // Hàng 2 (z =  1, kề F): x = -1, 0, 1
+            U: [
+                { x: -1, y: 1, z: -1, mat: 2 },
+                { x:  0, y: 1, z: -1, mat: 2 },
+                { x:  1, y: 1, z: -1, mat: 2 },
+                { x: -1, y: 1, z:  0, mat: 2 },
+                { x:  0, y: 1, z:  0, mat: 2 },
+                { x:  1, y: 1, z:  0, mat: 2 },
+                { x: -1, y: 1, z:  1, mat: 2 },
+                { x:  0, y: 1, z:  1, mat: 2 },
+                { x:  1, y: 1, z:  1, mat: 2 }
+            ],
+            // Face R (9..17): x = +1, mặt +X (mat: 0)
+            // Hàng 0 (y =  1, kề U): z =  1, 0, -1
+            // Hàng 1 (y =  0):       z =  1, 0, -1
+            // Hàng 2 (y = -1, kề D): z =  1, 0, -1
+            R: [
+                { x: 1, y:  1, z:  1, mat: 0 },
+                { x: 1, y:  1, z:  0, mat: 0 },
+                { x: 1, y:  1, z: -1, mat: 0 },
+                { x: 1, y:  0, z:  1, mat: 0 },
+                { x: 1, y:  0, z:  0, mat: 0 },
+                { x: 1, y:  0, z: -1, mat: 0 },
+                { x: 1, y: -1, z:  1, mat: 0 },
+                { x: 1, y: -1, z:  0, mat: 0 },
+                { x: 1, y: -1, z: -1, mat: 0 }
+            ],
+            // Face F (18..26): z = +1, mặt +Z (mat: 4)
+            // Hàng 0 (y =  1, kề U): x = -1, 0, 1
+            // Hàng 1 (y =  0):       x = -1, 0, 1
+            // Hàng 2 (y = -1, kề D): x = -1, 0, 1
+            F: [
+                { x: -1, y:  1, z: 1, mat: 4 },
+                { x:  0, y:  1, z: 1, mat: 4 },
+                { x:  1, y:  1, z: 1, mat: 4 },
+                { x: -1, y:  0, z: 1, mat: 4 },
+                { x:  0, y:  0, z: 1, mat: 4 },
+                { x:  1, y:  0, z: 1, mat: 4 },
+                { x: -1, y: -1, z: 1, mat: 4 },
+                { x:  0, y: -1, z: 1, mat: 4 },
+                { x:  1, y: -1, z: 1, mat: 4 }
+            ],
+            // Face D (27..35): y = -1, mặt -Y (mat: 3)
+            // Hàng 0 (z =  1, kề F): x = -1, 0, 1
+            // Hàng 1 (z =  0):       x = -1, 0, 1
+            // Hàng 2 (z = -1, kề B): x = -1, 0, 1
+            D: [
+                { x: -1, y: -1, z:  1, mat: 3 },
+                { x:  0, y: -1, z:  1, mat: 3 },
+                { x:  1, y: -1, z:  1, mat: 3 },
+                { x: -1, y: -1, z:  0, mat: 3 },
+                { x:  0, y: -1, z:  0, mat: 3 },
+                { x:  1, y: -1, z:  0, mat: 3 },
+                { x: -1, y: -1, z: -1, mat: 3 },
+                { x:  0, y: -1, z: -1, mat: 3 },
+                { x:  1, y: -1, z: -1, mat: 3 }
+            ],
+            // Face L (36..44): x = -1, mặt -X (mat: 1)
+            // Hàng 0 (y =  1, kề U): z = -1, 0, 1
+            // Hàng 1 (y =  0):       z = -1, 0, 1
+            // Hàng 2 (y = -1, kề D): z = -1, 0, 1
+            L: [
+                { x: -1, y:  1, z: -1, mat: 1 },
+                { x: -1, y:  1, z:  0, mat: 1 },
+                { x: -1, y:  1, z:  1, mat: 1 },
+                { x: -1, y:  0, z: -1, mat: 1 },
+                { x: -1, y:  0, z:  0, mat: 1 },
+                { x: -1, y:  0, z:  1, mat: 1 },
+                { x: -1, y: -1, z: -1, mat: 1 },
+                { x: -1, y: -1, z:  0, mat: 1 },
+                { x: -1, y: -1, z:  1, mat: 1 }
+            ],
+            // Face B (45..53): z = -1, mặt -Z (mat: 5)
+            // Hàng 0 (y =  1, kề U): x =  1, 0, -1
+            // Hàng 1 (y =  0):       x =  1, 0, -1
+            // Hàng 2 (y = -1, kề D): x =  1, 0, -1
+            B: [
+                { x:  1, y:  1, z: -1, mat: 5 },
+                { x:  0, y:  1, z: -1, mat: 5 },
+                { x: -1, y:  1, z: -1, mat: 5 },
+                { x:  1, y:  0, z: -1, mat: 5 },
+                { x:  0, y:  0, z: -1, mat: 5 },
+                { x: -1, y:  0, z: -1, mat: 5 },
+                { x:  1, y: -1, z: -1, mat: 5 },
+                { x:  0, y: -1, z: -1, mat: 5 },
+                { x: -1, y: -1, z: -1, mat: 5 }
+            ]
+        };
+
         function init() {
             const container = document.getElementById('canvas-container');
-            const w = container.clientWidth || window.innerWidth;
-            const h = container.clientHeight || window.innerHeight;
+            const w = container.clientWidth || window.innerWidth || 400;
+            const h = container.clientHeight || window.innerHeight || 400;
 
             scene = new THREE.Scene();
             scene.background = new THREE.Color(SCENE_BG);
 
-            camera = new THREE.PerspectiveCamera(42, w / h, 0.1, 100);
-            camera.position.set(4.2, 3.6, 5.0);
+            camera = new THREE.PerspectiveCamera(40, w / h, 0.1, 100);
+            camera.position.set(4.3, 3.8, 5.2);
 
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
             renderer.setSize(w, h);
@@ -108,24 +211,23 @@
             renderer.shadowMap.enabled = true;
             container.appendChild(renderer.domElement);
 
-            // Orbit Controls
             controls = new THREE.OrbitControls(camera, renderer.domElement);
             controls.enableDamping = true;
             controls.dampingFactor = 0.08;
-            controls.minDistance = 3.5;
+            controls.minDistance = 3.2;
             controls.maxDistance = 14;
 
-            // Ánh sáng chân thực
-            const ambientLight = new THREE.AmbientLight(0xFFFFFF, 0.75);
-            scene.add(ambientLight);
+            // Ánh sáng chiếu đều 6 mặt
+            const ambient = new THREE.AmbientLight(0xFFFFFF, 0.78);
+            scene.add(ambient);
 
-            const dirLight1 = new THREE.DirectionalLight(0xFFFFFF, 0.85);
-            dirLight1.position.set(6, 10, 8);
-            scene.add(dirLight1);
+            const dir1 = new THREE.DirectionalLight(0xFFFFFF, 0.82);
+            dir1.position.set(6, 10, 8);
+            scene.add(dir1);
 
-            const dirLight2 = new THREE.DirectionalLight(0x90A0D0, 0.5);
-            dirLight2.position.set(-6, -8, -6);
-            scene.add(dirLight2);
+            const dir2 = new THREE.DirectionalLight(0xA0B0D0, 0.45);
+            dir2.position.set(-6, -8, -6);
+            scene.add(dir2);
 
             pivot = new THREE.Group();
             scene.add(pivot);
@@ -133,47 +235,51 @@
             createRubikCube();
 
             window.addEventListener('resize', onWindowResize);
-            animate();
+            animateLoop();
+
+            // Nếu đã có sẵn dữ liệu màu trước khi scene tải xong
+            if (latestColorString) {
+                window.setCubeState(latestColorString);
+            }
         }
 
-        // Tạo 27 viên cubie
         function createRubikCube() {
-            // Xóa cũ nếu có
-            cubies.forEach(c => scene.remove(c));
             cubies = [];
+            cubiesByCoord = {};
 
             const geom = new THREE.BoxGeometry(CUBIE_SIZE, CUBIE_SIZE, CUBIE_SIZE);
 
             for (let x = -1; x <= 1; x++) {
                 for (let y = -1; y <= 1; y++) {
                     for (let z = -1; z <= 1; z++) {
-                        // 6 vật liệu cho 6 mặt của BoxGeometry:
-                        // 0: +x (Right), 1: -x (Left), 2: +y (Up), 3: -y (Down), 4: +z (Front), 5: -z (Back)
+                        // 6 vật liệu độc lập cho mỗi cubie
                         const materials = [
-                            createStickerMaterial(x === 1 ? 'R' : 'INTERNAL'),
-                            createStickerMaterial(x === -1 ? 'O' : 'INTERNAL'),
-                            createStickerMaterial(y === 1 ? 'W' : 'INTERNAL'),
-                            createStickerMaterial(y === -1 ? 'Y' : 'INTERNAL'),
-                            createStickerMaterial(z === 1 ? 'G' : 'INTERNAL'),
-                            createStickerMaterial(z === -1 ? 'B' : 'INTERNAL')
+                            createMat(x === 1 ? 'R' : 'INTERNAL'),
+                            createMat(x === -1 ? 'O' : 'INTERNAL'),
+                            createMat(y === 1 ? 'W' : 'INTERNAL'),
+                            createMat(y === -1 ? 'Y' : 'INTERNAL'),
+                            createMat(z === 1 ? 'G' : 'INTERNAL'),
+                            createMat(z === -1 ? 'B' : 'INTERNAL')
                         ];
 
                         const cubie = new THREE.Mesh(geom, materials);
                         cubie.position.set(x * CUBIE_GAP, y * CUBIE_GAP, z * CUBIE_GAP);
                         cubie.userData = { gridX: x, gridY: y, gridZ: z };
+
                         scene.add(cubie);
                         cubies.push(cubie);
+                        cubiesByCoord[`${x},${y},${z}`] = cubie;
                     }
                 }
             }
         }
 
-        function createStickerMaterial(colorKey) {
+        function createMat(colorKey) {
             const hex = COLOR_MAP[colorKey] !== undefined ? COLOR_MAP[colorKey] : COLOR_MAP['INTERNAL'];
             return new THREE.MeshStandardMaterial({
                 color: hex,
-                roughness: colorKey === 'INTERNAL' ? 0.8 : 0.25,
-                metalness: 0.1
+                roughness: colorKey === 'INTERNAL' ? 0.85 : 0.22,
+                metalness: 0.08
             });
         }
 
@@ -181,140 +287,86 @@
             const container = document.getElementById('canvas-container');
             const w = container.clientWidth || window.innerWidth;
             const h = container.clientHeight || window.innerHeight;
+            if (w === 0 || h === 0) return;
             camera.aspect = w / h;
             camera.updateProjectionMatrix();
             renderer.setSize(w, h);
         }
 
-        function animate() {
-            requestAnimationFrame(animate);
+        function animateLoop() {
+            requestAnimationFrame(animateLoop);
             controls.update();
             renderer.render(scene, camera);
         }
 
         function resetCameraView() {
             controls.reset();
-            camera.position.set(4.2, 3.6, 5.0);
+            camera.position.set(4.3, 3.8, 5.2);
             controls.target.set(0, 0, 0);
         }
 
-        // ================= CẬP NHẬT TRẠNG THÁI 54 STICKERS =================
-        // Thứ tự: U (0..8), R (9..17), F (18..26), D (27..35), L (36..44), B (45..53)
+        // ================= ĐỒNG BỘ 54 MÀU TUYỆT ĐỐI VỚI 2D =================
         window.setCubeState = function(colorStr) {
             if (!colorStr || colorStr.length !== 54) return;
+            latestColorString = colorStr;
 
-            // U: y = 1 (+y, material index 2)
-            // U0..U8: row 0 (z=-1: x=-1,0,1), row 1 (z=0: x=-1,0,1), row 2 (z=1: x=-1,0,1)
-            const uMap = [
-                [-1, 1, -1], [0, 1, -1], [1, 1, -1],
-                [-1, 1,  0], [0, 1,  0], [1, 1,  0],
-                [-1, 1,  1], [0, 1,  1], [1, 1,  1]
-            ];
-            for (let i = 0; i < 9; i++) {
-                setStickerColor(uMap[i], 2, colorStr[i]);
+            // Nếu đang quay dở animation, ép kết thúc ngay để cập nhật
+            if (isAnimating) {
+                cancelCurrentAnimation();
             }
 
-            // R: x = 1 (+x, material index 0)
-            // R0..R8: row 0 (y=1: z=1,0,-1), row 1 (y=0: z=1,0,-1), row 2 (y=-1: z=1,0,-1)
-            const rMap = [
-                [1,  1,  1], [1,  1,  0], [1,  1, -1],
-                [1,  0,  1], [1,  0,  0], [1,  0, -1],
-                [1, -1,  1], [1, -1,  0], [1, -1, -1]
-            ];
-            for (let i = 0; i < 9; i++) {
-                setStickerColor(rMap[i], 0, colorStr[9 + i]);
-            }
-
-            // F: z = 1 (+z, material index 4)
-            // F0..F8: row 0 (y=1: x=-1,0,1), row 1 (y=0: x=-1,0,1), row 2 (y=-1: x=-1,0,1)
-            const fMap = [
-                [-1,  1, 1], [0,  1, 1], [1,  1, 1],
-                [-1,  0, 1], [0,  0, 1], [1,  0, 1],
-                [-1, -1, 1], [0, -1, 1], [1, -1, 1]
-            ];
-            for (let i = 0; i < 9; i++) {
-                setStickerColor(fMap[i], 4, colorStr[18 + i]);
-            }
-
-            // D: y = -1 (-y, material index 3)
-            // D0..D8: row 0 (z=1: x=-1,0,1), row 1 (z=0: x=-1,0,1), row 2 (z=-1: x=-1,0,1)
-            const dMap = [
-                [-1, -1,  1], [0, -1,  1], [1, -1,  1],
-                [-1, -1,  0], [0, -1,  0], [1, -1,  0],
-                [-1, -1, -1], [0, -1, -1], [1, -1, -1]
-            ];
-            for (let i = 0; i < 9; i++) {
-                setStickerColor(dMap[i], 3, colorStr[27 + i]);
-            }
-
-            // L: x = -1 (-x, material index 1)
-            // L0..L8: row 0 (y=1: z=-1,0,1), row 1 (y=0: z=-1,0,1), row 2 (y=-1: z=-1,0,1)
-            const lMap = [
-                [-1,  1, -1], [-1,  1,  0], [-1,  1,  1],
-                [-1,  0, -1], [-1,  0,  0], [-1,  0,  1],
-                [-1, -1, -1], [-1, -1,  0], [-1, -1,  1]
-            ];
-            for (let i = 0; i < 9; i++) {
-                setStickerColor(lMap[i], 1, colorStr[36 + i]);
-            }
-
-            // B: z = -1 (-z, material index 5)
-            // B0..B8: row 0 (y=1: x=1,0,-1), row 1 (y=0: x=1,0,-1), row 2 (y=-1: x=1,0,-1)
-            const bMap = [
-                [ 1,  1, -1], [ 0,  1, -1], [-1,  1, -1],
-                [ 1,  0, -1], [ 0,  0, -1], [-1,  0, -1],
-                [ 1, -1, -1], [ 0, -1, -1], [-1, -1, -1]
-            ];
-            for (let i = 0; i < 9; i++) {
-                setStickerColor(bMap[i], 5, colorStr[45 + i]);
+            const faceOrder = ['U', 'R', 'F', 'D', 'L', 'B'];
+            for (let fIdx = 0; fIdx < 6; fIdx++) {
+                const face = faceOrder[fIdx];
+                const mappings = STICKER_MAPPINGS[face];
+                for (let i = 0; i < 9; i++) {
+                    const charColor = colorStr[fIdx * 9 + i];
+                    const hex = COLOR_MAP[charColor] !== undefined ? COLOR_MAP[charColor] : COLOR_MAP['?'];
+                    const info = mappings[i];
+                    const key = `${info.x},${info.y},${info.z}`;
+                    const cubie = cubiesByCoord[key];
+                    if (cubie && cubie.material[info.mat]) {
+                        cubie.material[info.mat].color.setHex(hex);
+                    }
+                }
             }
         };
 
-        function setStickerColor(pos, matIndex, charColor) {
-            const hex = COLOR_MAP[charColor] || COLOR_MAP['?'];
-            const target = cubies.find(c => 
-                Math.round(c.position.x / CUBIE_GAP) === pos[0] &&
-                Math.round(c.position.y / CUBIE_GAP) === pos[1] &&
-                Math.round(c.position.z / CUBIE_GAP) === pos[2]
-            );
-            if (target && target.material[matIndex]) {
-                target.material[matIndex].color.setHex(hex);
-            }
-        }
-
-        // ================= DIỄN HOẠT XOAY 3D TỪNG MẶT =================
+        // ================= DIỄN HOẠT XOAY 3D MƯỢT MÀ =================
         window.animateMove = function(move, durationMs, finalColorStr) {
-            if (isAnimating) {
-                // Nếu đang diễn hoạt nước đi trước, ép hoàn tất ngay
-                finishAnimationImmediately();
-            }
-
-            move = move.trim();
+            move = (move || '').trim();
             if (!move) {
                 if (finalColorStr) window.setCubeState(finalColorStr);
                 return;
             }
 
-            const face = move[0].toUpperCase();
-            const mod = move.length > 1 ? move[1] : '';
-            durationMs = Math.max(150, durationMs || 450);
+            if (finalColorStr) {
+                latestColorString = finalColorStr;
+            }
 
-            // Xác định trục xoay, tọa độ mặt và góc quay (radian)
+            if (isAnimating) {
+                cancelCurrentAnimation();
+            }
+
+            const baseFace = move[0].toUpperCase();
+            const mod = move.length > 1 ? move[1] : '';
+            durationMs = Math.max(160, durationMs || 400);
+
             let axis = 'y';
             let layerCoord = 0;
             let angle = -Math.PI / 2;
 
-            if (face === 'U') {
+            if (baseFace === 'U') {
                 axis = 'y'; layerCoord = 1; angle = -Math.PI / 2;
-            } else if (face === 'D') {
+            } else if (baseFace === 'D') {
                 axis = 'y'; layerCoord = -1; angle = Math.PI / 2;
-            } else if (face === 'R') {
+            } else if (baseFace === 'R') {
                 axis = 'x'; layerCoord = 1; angle = -Math.PI / 2;
-            } else if (face === 'L') {
+            } else if (baseFace === 'L') {
                 axis = 'x'; layerCoord = -1; angle = Math.PI / 2;
-            } else if (face === 'F') {
+            } else if (baseFace === 'F') {
                 axis = 'z'; layerCoord = 1; angle = -Math.PI / 2;
-            } else if (face === 'B') {
+            } else if (baseFace === 'B') {
                 axis = 'z'; layerCoord = -1; angle = Math.PI / 2;
             }
 
@@ -324,15 +376,13 @@
                 angle = angle * 2;
             }
 
-            // Lọc 9 viên thuộc lớp xoay
-            const activeCubies = cubies.filter(c => {
-                const val = Math.round(c.position[axis] / CUBIE_GAP);
-                return val === layerCoord;
-            });
+            // Tìm 9 viên thuộc lớp cần xoay
+            const gridProp = (axis === 'x') ? 'gridX' : (axis === 'y' ? 'gridY' : 'gridZ');
+            activeLayerCubies = cubies.filter(c => c.userData[gridProp] === layerCoord);
 
             // Gắn 9 viên vào pivot
             pivot.rotation.set(0, 0, 0);
-            activeCubies.forEach(c => {
+            activeLayerCubies.forEach(c => {
                 scene.remove(c);
                 pivot.add(c);
             });
@@ -340,58 +390,62 @@
             isAnimating = true;
             const startTime = performance.now();
 
-            function step(time) {
+            function frameStep(time) {
                 const elapsed = time - startTime;
                 const progress = Math.min(1.0, elapsed / durationMs);
-                // Easing cubic out
-                const ease = 1 - Math.pow(1 - progress, 3);
+                // Cubic ease out
+                const ease = 1.0 - Math.pow(1.0 - progress, 3);
                 pivot.rotation[axis] = angle * ease;
 
                 if (progress < 1.0) {
-                    requestAnimationFrame(step);
+                    currentAnimationId = requestAnimationFrame(frameStep);
                 } else {
-                    // Hoàn tất animation
-                    finishMove(activeCubies, finalColorStr);
+                    finishAndResetToUpright(activeLayerCubies, finalColorStr);
                 }
             }
-            requestAnimationFrame(step);
+            currentAnimationId = requestAnimationFrame(frameStep);
         };
 
-        function finishMove(activeCubies, finalColorStr) {
-            pivot.updateMatrixWorld();
-            activeCubies.forEach(c => {
-                c.applyMatrix4(pivot.matrixWorld);
+        function finishAndResetToUpright(activeList, finalColorStr) {
+            // Đưa 9 viên cubie về lại scene ở vị trí chuẩn ban đầu
+            activeList.forEach(c => {
                 pivot.remove(c);
                 scene.add(c);
-                // Làm tròn lại tọa độ để tránh trôi số thập phân
-                c.position.x = Math.round(c.position.x / CUBIE_GAP) * CUBIE_GAP;
-                c.position.y = Math.round(c.position.y / CUBIE_GAP) * CUBIE_GAP;
-                c.position.z = Math.round(c.position.z / CUBIE_GAP) * CUBIE_GAP;
+                c.position.set(c.userData.gridX * CUBIE_GAP, c.userData.gridY * CUBIE_GAP, c.userData.gridZ * CUBIE_GAP);
+                c.rotation.set(0, 0, 0);
             });
             pivot.rotation.set(0, 0, 0);
             isAnimating = false;
+            activeLayerCubies = [];
+            currentAnimationId = null;
 
-            // Đồng bộ lại toàn bộ trạng thái màu chính xác tuyệt đối
+            // Đồng bộ màu 54 ô từ finalColorStr với độ chính xác 100%
             if (finalColorStr) {
                 window.setCubeState(finalColorStr);
             }
         }
 
-        function finishAnimationImmediately() {
-            if (!isAnimating) return;
+        function cancelCurrentAnimation() {
+            if (currentAnimationId) {
+                cancelAnimationFrame(currentAnimationId);
+                currentAnimationId = null;
+            }
+            if (activeLayerCubies && activeLayerCubies.length > 0) {
+                activeLayerCubies.forEach(c => {
+                    pivot.remove(c);
+                    scene.add(c);
+                    c.position.set(c.userData.gridX * CUBIE_GAP, c.userData.gridY * CUBIE_GAP, c.userData.gridZ * CUBIE_GAP);
+                    c.rotation.set(0, 0, 0);
+                });
+            }
             pivot.rotation.set(0, 0, 0);
-            const children = [...pivot.children];
-            children.forEach(c => {
-                pivot.remove(c);
-                scene.add(c);
-                c.position.x = Math.round(c.position.x / CUBIE_GAP) * CUBIE_GAP;
-                c.position.y = Math.round(c.position.y / CUBIE_GAP) * CUBIE_GAP;
-                c.position.z = Math.round(c.position.z / CUBIE_GAP) * CUBIE_GAP;
-            });
             isAnimating = false;
+            activeLayerCubies = [];
+            if (latestColorString) {
+                window.setCubeState(latestColorString);
+            }
         }
 
-        // Khởi động khi tải xong
         window.onload = init;
     </script>
 </body>
