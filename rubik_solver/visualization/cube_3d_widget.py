@@ -16,7 +16,7 @@ from rubik_solver.cube.cube_state import CubeState
 class Cube3DWidget(QWidget):
     def __init__(self, cube: Optional[CubeState] = None, parent=None):
         super().__init__(parent)
-        self.cube: CubeState = cube or CubeState()
+        self.cube: CubeState = (cube or CubeState()).clone()
         self._is_page_loaded = False
         self._pending_color_str: Optional[str] = None
 
@@ -44,13 +44,13 @@ class Cube3DWidget(QWidget):
     def _on_load_finished(self, ok: bool) -> None:
         self._is_page_loaded = ok
         if ok:
-            # Đồng bộ trạng thái màu ban đầu
+            # Đồng bộ ngay lập tức trạng thái màu mới nhất
             target_str = self._pending_color_str or self.cube.to_color_string()
             self._execute_js(f"window.setCubeState('{target_str}');")
             self._pending_color_str = None
 
     def set_cube_state(self, cube: CubeState) -> None:
-        """Cập nhật trạng thái màu 54 ô lên mô hình 3D."""
+        """Cập nhật trạng thái màu 54 ô lên mô hình 3D (tức thì, không diễn hoạt)."""
         self.cube = cube.clone()
         color_str = self.cube.to_color_string()
 
@@ -60,7 +60,7 @@ class Cube3DWidget(QWidget):
             self._pending_color_str = color_str
 
     def animate_move(self, move: str, duration_ms: int = 400, target_cube: Optional[CubeState] = None) -> None:
-        """Diễn hoạt xoay 1 mặt trong không gian 3D mượt mà."""
+        """Diễn hoạt xoay 1 mặt trong không gian 3D mượt mà và cập nhật màu chính xác."""
         if target_cube:
             self.cube = target_cube.clone()
             target_str = self.cube.to_color_string()

@@ -15,10 +15,16 @@ from rubik_solver.solver.move_formatter import (
 
 
 class StepGuideController(QObject):
-    # Tín hiệu phát đi khi bước thay đổi: (StepInfo hiện tại, bước hiện tại [1-based], tổng bước)
+    # Tín hiệu phát đi khi bước thay đổi: (StepInfo mô tả bước tiếp theo, index hiện tại [0..N], tổng bước N)
     step_changed = Signal(object, int, int)
     cube_state_changed = Signal(CubeState)
     playback_finished = Signal()
+
+    # Tín hiệu chuyên biệt cho diễn hoạt xoay 3D:
+    # move_executed: vừa xoay nước đi nào, và trạng thái Rubik sau khi xoay
+    move_executed = Signal(str, CubeState)
+    # state_reset: nạp lại trạng thái tĩnh (không diễn hoạt)
+    state_reset = Signal(CubeState)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -42,6 +48,7 @@ class StepGuideController(QObject):
         self.step_info_list = get_step_info_list(self.moves, self.initial_cube)
         self.current_index = 0
 
+        self.state_reset.emit(self.current_cube.clone())
         self._emit_current_state()
 
     @property
@@ -69,6 +76,7 @@ class StepGuideController(QObject):
         self.current_cube.rotate_face(move)
         self.current_index += 1
 
+        self.move_executed.emit(move, self.current_cube.clone())
         self._emit_current_state()
 
         if self.current_index >= self.total_steps:
@@ -86,6 +94,7 @@ class StepGuideController(QObject):
         inv = invert_move(move)
         self.current_cube.rotate_face(inv)
 
+        self.move_executed.emit(inv, self.current_cube.clone())
         self._emit_current_state()
         return True
 
@@ -95,6 +104,8 @@ class StepGuideController(QObject):
         if self.initial_cube:
             self.current_cube = self.initial_cube.clone()
         self.current_index = 0
+        if self.current_cube:
+            self.state_reset.emit(self.current_cube.clone())
         self._emit_current_state()
 
     def play(self) -> None:
@@ -116,10 +127,16 @@ class StepGuideController(QObject):
 
     def jump_to_step(self, target_step_index: int) -> None:
         """Nhảy trực tiếp đến bước chỉ định (0 đến total_steps)."""
+        self.pause()
         target_step_index = max(0, min(target_step_index, self.total_steps))
-        self.reset()
-        for _ in range(target_step_index):
-            self.next_step()
+        if self.initial_cube:
+            self.current_cube = self.initial_cube.clone()
+        for i in range(target_step_index):
+            self.current_cube.rotate_face(self.moves[i])
+        self.current_index = target_step_index
+        if self.current_cube:
+            self.state_reset.emit(self.current_cube.clone())
+        self._emit_current_state()
 
     def _emit_current_state(self) -> None:
         step_info = None
