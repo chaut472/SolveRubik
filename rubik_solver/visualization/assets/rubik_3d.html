@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Rubik Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+        }
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #18191C;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        #hud {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            display: flex;
+            gap: 8px;
+            z-index: 10;
+        }
+        .hud-btn {
+            background: rgba(30, 41, 59, 0.85);
+            color: #94A3B8;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            backdrop-filter: blur(4px);
+            transition: all 0.2s ease;
+        }
+        .hud-btn:hover {
+            background: #2563EB;
+            color: #FFFFFF;
+            border-color: #38BDF8;
+        }
+        #info-overlay {
+            position: absolute;
+            bottom: 10px;
+            left: 12px;
+            color: #64748B;
+            font-size: 11px;
+            pointer-events: none;
+        }
+    </style>
+    <script src="three.min.js"></script>
+    <script src="orbit_controls.js"></script>
+</head>
+<body>
+    <div id="hud">
+        <button class="hud-btn" onclick="resetCameraView()">🔄 Đặt Lại Góc Nhìn</button>
+    </div>
+    <div id="info-overlay">Dùng chuột kéo để xoay 360° • Cuộn chuột để phóng to/thu nhỏ</div>
+    <div id="canvas-container"></div>
+
+    <script>
+        // Bảng màu chuẩn quốc tế
+        const COLOR_MAP = {
+            'W': 0xFFFFFF, // Up (Trắng)
+            'Y': 0xFFD500, // Down (Vàng)
+            'G': 0x009B48, // Front (Xanh lá)
+            'B': 0x0046AD, // Back (Xanh dương)
+            'R': 0xB71234, // Right (Đỏ)
+            'O': 0xFF5800, // Left (Cam)
+            '?': 0x334155, // Chưa xác định
+            'INTERNAL': 0x141416 // Mặt bên trong
+        };
+
+        const SCENE_BG = 0x18191C;
+        const CUBIE_SIZE = 0.96;
+        const CUBIE_GAP = 1.02;
+
+        let scene, camera, renderer, controls;
+        let cubies = []; // 27 viên nhỏ
+        let pivot; // Group để xoay một lớp
+        let isAnimating = false;
+        let animationQueue = [];
+
+        // Khởi tạo Three.js Scene
+        function init() {
+            const container = document.getElementById('canvas-container');
+            const w = container.clientWidth || window.innerWidth;
+            const h = container.clientHeight || window.innerHeight;
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(SCENE_BG);
+
+            camera = new THREE.PerspectiveCamera(42, w / h, 0.1, 100);
+            camera.position.set(4.2, 3.6, 5.0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+            renderer.setSize(w, h);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            // Orbit Controls
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.08;
+            controls.minDistance = 3.5;
+            controls.maxDistance = 14;
+
+            // Ánh sáng chân thực
+            const ambientLight = new THREE.AmbientLight(0xFFFFFF, 0.75);
+            scene.add(ambientLight);
+
+            const dirLight1 = new THREE.DirectionalLight(0xFFFFFF, 0.85);
+            dirLight1.position.set(6, 10, 8);
+            scene.add(dirLight1);
+
+            const dirLight2 = new THREE.DirectionalLight(0x90A0D0, 0.5);
+            dirLight2.position.set(-6, -8, -6);
+            scene.add(dirLight2);
+
+            pivot = new THREE.Group();
+            scene.add(pivot);
+
+            createRubikCube();
+
+            window.addEventListener('resize', onWindowResize);
+            animate();
+        }
+
+        // Tạo 27 viên cubie
+        function createRubikCube() {
+            // Xóa cũ nếu có
+            cubies.forEach(c => scene.remove(c));
+            cubies = [];
+
+            const geom = new THREE.BoxGeometry(CUBIE_SIZE, CUBIE_SIZE, CUBIE_SIZE);
+
+            for (let x = -1; x <= 1; x++) {
+                for (let y = -1; y <= 1; y++) {
+                    for (let z = -1; z <= 1; z++) {
+                        // 6 vật liệu cho 6 mặt của BoxGeometry:
+                        // 0: +x (Right), 1: -x (Left), 2: +y (Up), 3: -y (Down), 4: +z (Front), 5: -z (Back)
+                        const materials = [
+                            createStickerMaterial(x === 1 ? 'R' : 'INTERNAL'),
+                            createStickerMaterial(x === -1 ? 'O' : 'INTERNAL'),
+                            createStickerMaterial(y === 1 ? 'W' : 'INTERNAL'),
+                            createStickerMaterial(y === -1 ? 'Y' : 'INTERNAL'),
+                            createStickerMaterial(z === 1 ? 'G' : 'INTERNAL'),
+                            createStickerMaterial(z === -1 ? 'B' : 'INTERNAL')
+                        ];
+
+                        const cubie = new THREE.Mesh(geom, materials);
+                        cubie.position.set(x * CUBIE_GAP, y * CUBIE_GAP, z * CUBIE_GAP);
+                        cubie.userData = { gridX: x, gridY: y, gridZ: z };
+                        scene.add(cubie);
+                        cubies.push(cubie);
+                    }
+                }
+            }
+        }
+
+        function createStickerMaterial(colorKey) {
+            const hex = COLOR_MAP[colorKey] !== undefined ? COLOR_MAP[colorKey] : COLOR_MAP['INTERNAL'];
+            return new THREE.MeshStandardMaterial({
+                color: hex,
+                roughness: colorKey === 'INTERNAL' ? 0.8 : 0.25,
+                metalness: 0.1
+            });
+        }
+
+        function onWindowResize() {
+            const container = document.getElementById('canvas-container');
+            const w = container.clientWidth || window.innerWidth;
+            const h = container.clientHeight || window.innerHeight;
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+            renderer.setSize(w, h);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        function resetCameraView() {
+            controls.reset();
+            camera.position.set(4.2, 3.6, 5.0);
+            controls.target.set(0, 0, 0);
+        }
+
+        // ================= CẬP NHẬT TRẠNG THÁI 54 STICKERS =================
+        // Thứ tự: U (0..8), R (9..17), F (18..26), D (27..35), L (36..44), B (45..53)
+        window.setCubeState = function(colorStr) {
+            if (!colorStr || colorStr.length !== 54) return;
+
+            // U: y = 1 (+y, material index 2)
+            // U0..U8: row 0 (z=-1: x=-1,0,1), row 1 (z=0: x=-1,0,1), row 2 (z=1: x=-1,0,1)
+            const uMap = [
+                [-1, 1, -1], [0, 1, -1], [1, 1, -1],
+                [-1, 1,  0], [0, 1,  0], [1, 1,  0],
+                [-1, 1,  1], [0, 1,  1], [1, 1,  1]
+            ];
+            for (let i = 0; i < 9; i++) {
+                setStickerColor(uMap[i], 2, colorStr[i]);
+            }
+
+            // R: x = 1 (+x, material index 0)
+            // R0..R8: row 0 (y=1: z=1,0,-1), row 1 (y=0: z=1,0,-1), row 2 (y=-1: z=1,0,-1)
+            const rMap = [
+                [1,  1,  1], [1,  1,  0], [1,  1, -1],
+                [1,  0,  1], [1,  0,  0], [1,  0, -1],
+                [1, -1,  1], [1, -1,  0], [1, -1, -1]
+            ];
+            for (let i = 0; i < 9; i++) {
+                setStickerColor(rMap[i], 0, colorStr[9 + i]);
+            }
+
+            // F: z = 1 (+z, material index 4)
+            // F0..F8: row 0 (y=1: x=-1,0,1), row 1 (y=0: x=-1,0,1), row 2 (y=-1: x=-1,0,1)
+            const fMap = [
+                [-1,  1, 1], [0,  1, 1], [1,  1, 1],
+                [-1,  0, 1], [0,  0, 1], [1,  0, 1],
+                [-1, -1, 1], [0, -1, 1], [1, -1, 1]
+            ];
+            for (let i = 0; i < 9; i++) {
+                setStickerColor(fMap[i], 4, colorStr[18 + i]);
+            }
+
+            // D: y = -1 (-y, material index 3)
+            // D0..D8: row 0 (z=1: x=-1,0,1), row 1 (z=0: x=-1,0,1), row 2 (z=-1: x=-1,0,1)
+            const dMap = [
+                [-1, -1,  1], [0, -1,  1], [1, -1,  1],
+                [-1, -1,  0], [0, -1,  0], [1, -1,  0],
+                [-1, -1, -1], [0, -1, -1], [1, -1, -1]
+            ];
+            for (let i = 0; i < 9; i++) {
+                setStickerColor(dMap[i], 3, colorStr[27 + i]);
+            }
+
+            // L: x = -1 (-x, material index 1)
+            // L0..L8: row 0 (y=1: z=-1,0,1), row 1 (y=0: z=-1,0,1), row 2 (y=-1: z=-1,0,1)
+            const lMap = [
+                [-1,  1, -1], [-1,  1,  0], [-1,  1,  1],
+                [-1,  0, -1], [-1,  0,  0], [-1,  0,  1],
+                [-1, -1, -1], [-1, -1,  0], [-1, -1,  1]
+            ];
+            for (let i = 0; i < 9; i++) {
+                setStickerColor(lMap[i], 1, colorStr[36 + i]);
+            }
+
+            // B: z = -1 (-z, material index 5)
+            // B0..B8: row 0 (y=1: x=1,0,-1), row 1 (y=0: x=1,0,-1), row 2 (y=-1: x=1,0,-1)
+            const bMap = [
+                [ 1,  1, -1], [ 0,  1, -1], [-1,  1, -1],
+                [ 1,  0, -1], [ 0,  0, -1], [-1,  0, -1],
+                [ 1, -1, -1], [ 0, -1, -1], [-1, -1, -1]
+            ];
+            for (let i = 0; i < 9; i++) {
+                setStickerColor(bMap[i], 5, colorStr[45 + i]);
+            }
+        };
+
+        function setStickerColor(pos, matIndex, charColor) {
+            const hex = COLOR_MAP[charColor] || COLOR_MAP['?'];
+            const target = cubies.find(c => 
+                Math.round(c.position.x / CUBIE_GAP) === pos[0] &&
+                Math.round(c.position.y / CUBIE_GAP) === pos[1] &&
+                Math.round(c.position.z / CUBIE_GAP) === pos[2]
+            );
+            if (target && target.material[matIndex]) {
+                target.material[matIndex].color.setHex(hex);
+            }
+        }
+
+        // ================= DIỄN HOẠT XOAY 3D TỪNG MẶT =================
+        window.animateMove = function(move, durationMs, finalColorStr) {
+            if (isAnimating) {
+                // Nếu đang diễn hoạt nước đi trước, ép hoàn tất ngay
+                finishAnimationImmediately();
+            }
+
+            move = move.trim();
+            if (!move) {
+                if (finalColorStr) window.setCubeState(finalColorStr);
+                return;
+            }
+
+            const face = move[0].toUpperCase();
+            const mod = move.length > 1 ? move[1] : '';
+            durationMs = Math.max(150, durationMs || 450);
+
+            // Xác định trục xoay, tọa độ mặt và góc quay (radian)
+            let axis = 'y';
+            let layerCoord = 0;
+            let angle = -Math.PI / 2;
+
+            if (face === 'U') {
+                axis = 'y'; layerCoord = 1; angle = -Math.PI / 2;
+            } else if (face === 'D') {
+                axis = 'y'; layerCoord = -1; angle = Math.PI / 2;
+            } else if (face === 'R') {
+                axis = 'x'; layerCoord = 1; angle = -Math.PI / 2;
+            } else if (face === 'L') {
+                axis = 'x'; layerCoord = -1; angle = Math.PI / 2;
+            } else if (face === 'F') {
+                axis = 'z'; layerCoord = 1; angle = -Math.PI / 2;
+            } else if (face === 'B') {
+                axis = 'z'; layerCoord = -1; angle = Math.PI / 2;
+            }
+
+            if (mod === "'") {
+                angle = -angle;
+            } else if (mod === '2') {
+                angle = angle * 2;
+            }
+
+            // Lọc 9 viên thuộc lớp xoay
+            const activeCubies = cubies.filter(c => {
+                const val = Math.round(c.position[axis] / CUBIE_GAP);
+                return val === layerCoord;
+            });
+
+            // Gắn 9 viên vào pivot
+            pivot.rotation.set(0, 0, 0);
+            activeCubies.forEach(c => {
+                scene.remove(c);
+                pivot.add(c);
+            });
+
+            isAnimating = true;
+            const startTime = performance.now();
+
+            function step(time) {
+                const elapsed = time - startTime;
+                const progress = Math.min(1.0, elapsed / durationMs);
+                // Easing cubic out
+                const ease = 1 - Math.pow(1 - progress, 3);
+                pivot.rotation[axis] = angle * ease;
+
+                if (progress < 1.0) {
+                    requestAnimationFrame(step);
+                } else {
+                    // Hoàn tất animation
+                    finishMove(activeCubies, finalColorStr);
+                }
+            }
+            requestAnimationFrame(step);
+        };
+
+        function finishMove(activeCubies, finalColorStr) {
+            pivot.updateMatrixWorld();
+            activeCubies.forEach(c => {
+                c.applyMatrix4(pivot.matrixWorld);
+                pivot.remove(c);
+                scene.add(c);
+                // Làm tròn lại tọa độ để tránh trôi số thập phân
+                c.position.x = Math.round(c.position.x / CUBIE_GAP) * CUBIE_GAP;
+                c.position.y = Math.round(c.position.y / CUBIE_GAP) * CUBIE_GAP;
+                c.position.z = Math.round(c.position.z / CUBIE_GAP) * CUBIE_GAP;
+            });
+            pivot.rotation.set(0, 0, 0);
+            isAnimating = false;
+
+            // Đồng bộ lại toàn bộ trạng thái màu chính xác tuyệt đối
+            if (finalColorStr) {
+                window.setCubeState(finalColorStr);
+            }
+        }
+
+        function finishAnimationImmediately() {
+            if (!isAnimating) return;
+            pivot.rotation.set(0, 0, 0);
+            const children = [...pivot.children];
+            children.forEach(c => {
+                pivot.remove(c);
+                scene.add(c);
+                c.position.x = Math.round(c.position.x / CUBIE_GAP) * CUBIE_GAP;
+                c.position.y = Math.round(c.position.y / CUBIE_GAP) * CUBIE_GAP;
+                c.position.z = Math.round(c.position.z / CUBIE_GAP) * CUBIE_GAP;
+            });
+            isAnimating = false;
+        }
+
+        // Khởi động khi tải xong
+        window.onload = init;
+    </script>
+</body>
+</html>

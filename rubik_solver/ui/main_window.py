@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QFrame,
     QStatusBar,
+    QTabWidget,
 )
 
 from rubik_solver.camera.camera_stream import CameraThread
@@ -44,6 +45,7 @@ from rubik_solver.ui.manual_dialog import (
 )
 from rubik_solver.ui.video_widget import VideoWidget
 from rubik_solver.visualization.cube_net_2d import CubeNetWidget
+from rubik_solver.visualization.cube_3d_widget import Cube3DWidget
 from rubik_solver.visualization.step_guide import StepGuideController
 
 
@@ -136,10 +138,43 @@ class MainWindow(QMainWindow):
         model_header.setProperty("class", "HeaderLabel")
         right_layout.addWidget(model_header)
 
-        # Mô hình 2D
+        # Tab chuyển đổi giữa Mô hình 3D và Mô hình 2D
+        self.tabs_view = QTabWidget()
+        self.tabs_view.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #334155;
+                background-color: #18191C;
+                border-radius: 8px;
+            }
+            QTabBar::tab {
+                background: #1E222A;
+                color: #94A3B8;
+                font-weight: 600;
+                padding: 6px 14px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                margin-right: 4px;
+            }
+            QTabBar::tab:selected {
+                background: #2563EB;
+                color: #FFFFFF;
+            }
+            QTabBar::tab:hover:!selected {
+                background: #334155;
+                color: #E2E8F0;
+            }
+        """)
+
+        # Tab 1: Mô hình 3D
+        self.cube_3d = Cube3DWidget(self.cube_state, self)
+        self.tabs_view.addTab(self.cube_3d, "🎮 Mô Hình 3D (Xoay 360°)")
+
+        # Tab 2: Mô hình 2D
         self.cube_net = CubeNetWidget(self.cube_state, self)
         self.cube_net.sticker_clicked.connect(self._on_net_sticker_clicked)
-        right_layout.addWidget(self.cube_net, stretch=4)
+        self.tabs_view.addTab(self.cube_net, "🗺️ Mô Hình 2D (Trải Phẳng)")
+
+        right_layout.addWidget(self.tabs_view, stretch=5)
 
         # Thông báo trạng thái kiểm tra
         self.lbl_status = QLabel("Vui lòng quét đủ 6 mặt Rubik qua camera.")
@@ -289,6 +324,7 @@ class MainWindow(QMainWindow):
         # Gán màu vào mặt
         self.cube_state.set_face(target_face, detected_colors)
         self.cube_net.set_cube_state(self.cube_state)
+        self.cube_3d.set_cube_state(self.cube_state)
 
         # Chuyển sang mặt kế tiếp
         self.current_scan_step += 1
@@ -316,6 +352,7 @@ class MainWindow(QMainWindow):
         self.current_scan_step = 0
         self.cube_state.reset_to_solved()
         self.cube_net.set_cube_state(self.cube_state)
+        self.cube_3d.set_cube_state(self.cube_state)
         self._update_scan_prompt()
         self.lbl_status.setText("Đã đặt lại chu kỳ quét từ Mặt Trên (Trắng).")
 
@@ -328,6 +365,7 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             self.cube_state.set_sticker(face, index, dlg.selected_color)
             self.cube_net.set_cube_state(self.cube_state)
+            self.cube_3d.set_cube_state(self.cube_state)
             val = validate_cube_state(self.cube_state)
             if val.is_valid:
                 self.lbl_status.setText("✓ Trạng thái Rubik hợp lệ!")
@@ -342,6 +380,7 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             self.cube_state = dlg.get_cube_state()
             self.cube_net.set_cube_state(self.cube_state)
+            self.cube_3d.set_cube_state(self.cube_state)
             val = validate_cube_state(self.cube_state)
             if val.is_valid:
                 self.lbl_status.setText("✓ Trạng thái thủ công hợp lệ! Sẵn sàng giải.")
@@ -377,6 +416,7 @@ class MainWindow(QMainWindow):
             self.list_moves.addItem(item)
 
         # Nạp vào StepGuideController
+        self.cube_3d.set_cube_state(self.cube_state)
         self.step_controller.load_solution(self.cube_state, moves)
         self.progress_bar.setValue(0)
 
@@ -395,11 +435,19 @@ class MainWindow(QMainWindow):
         if 0 <= current_idx < self.list_moves.count():
             self.list_moves.setCurrentRow(current_idx)
 
+        cur_cube = self.step_controller.current_cube or self.cube_state
+
         # Hiển thị nước đi lớn
         if step_info:
             self.lbl_big_move.setText(step_info.move)
             self.lbl_step_desc.setText(step_info.get_full_text())
+
+            # Kích hoạt diễn hoạt xoay 3D mượt mà
+            speed_val = self.slider_speed.value()
+            anim_duration = max(180, int(speed_val * 0.55))
+            self.cube_3d.animate_move(step_info.move, anim_duration, cur_cube)
         else:
+            self.cube_3d.set_cube_state(cur_cube)
             if current_idx >= total_steps:
                 self.lbl_big_move.setText("HOÀN THÀNH")
                 self.lbl_step_desc.setText("🎉 Chúc mừng! Khối Rubik đã được giải hoàn tất.")

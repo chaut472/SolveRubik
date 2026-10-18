@@ -15,8 +15,9 @@ Hệ thống được thiết kế theo mô hình phân tầng hướng đối t
 5. **Bộ kiểm tra tính hợp lệ (Validator)**: Phát hiện sớm lỗi quét trùng tâm, thiếu/thừa màu (mỗi màu phải có đúng 9 ô), ô chưa nhận diện và các lỗi xoay góc/lật cạnh cơ học.
 6. **Thuật toán giải (Kociemba Two-Phase Algorithm)**: Giải Rubik tối ưu trong phạm vi 20-22 nước đi, tích hợp sẵn bản Pure-Python độc lập (không yêu cầu cài đặt trình biên dịch C++).
 7. **Trực quan hóa & Trình phát bước giải (Visualization & Player)**:
-   - Mô hình 2D phẳng (`CubeNetWidget`) chữ thập chuẩn quốc tế.
-   - Trình điều khiển bước giải (`StepGuideController`): Phát tự động, Tạm dừng, Bước tiếp, Bước trước, Nhảy tới bước bất kỳ, Thanh trượt tốc độ.
+   - **Mô hình 3D tương tác (`Cube3DWidget` - Three.js WebGL)**: Xoay tự do 360° bằng chuột, phóng to/thu nhỏ, mô phỏng chuyển động xoay mặt (animation) mượt mà theo từng bước giải.
+   - **Mô hình 2D phẳng (`CubeNetWidget`)**: Lưới chữ thập 6 mặt chuẩn quốc tế, cho phép click trực tiếp để sửa màu thủ công.
+   - **Trình điều khiển bước giải (`StepGuideController`)**: Phát tự động, Tạm dừng, Bước tiếp, Bước trước, Nhảy tới bước bất kỳ, Thanh trượt tốc độ.
    - Bảng cọ vẽ palette cho phép click sửa màu trực tiếp trên mô hình 54 ô nếu webcam bị chóa sáng.
 8. **Kiểm thử tự động & Đóng gói (Testing & Packaging)**: Bộ kiểm thử tự động `pytest` kiểm tra 100% logic cốt lõi; hướng dẫn đóng gói `.exe` bằng `PyInstaller`.
 
@@ -56,10 +57,15 @@ d:\Đồ Án\RUBIK\
 │   │   ├── move_formatter.py   # Phân tích cú pháp, đảo bước, mô tả tiếng Việt
 │   │   └── pykociemba/         # Động cơ Two-Phase Kociemba Pure-Python
 │   │
-│   ├── visualization/          # Thành phần 7: Hiển thị & Trình phát
+│   ├── visualization/          # Thành phần 7: Hiển thị 3D/2D & Trình phát
 │   │   ├── __init__.py
+│   │   ├── cube_3d_widget.py   # Widget 3D WebGL tương tác xoay 360 độ
 │   │   ├── cube_net_2d.py      # Widget 2D trải phẳng 6 mặt Rubik tương tác
-│   │   └── step_guide.py       # Bộ điều khiển bước giải (Play, Next, Prev, Speed)
+│   │   ├── step_guide.py       # Bộ điều khiển bước giải (Play, Next, Prev, Speed)
+│   │   └── assets/             # Tài nguyên WebGL Three.js & OrbitControls offline
+│   │       ├── rubik_3d.html
+│   │       ├── three.min.js
+│   │       └── orbit_controls.js
 │   │
 │   └── ui/                     # Thành phần 1: Giao diện PySide6
 │       ├── __init__.py
@@ -70,6 +76,7 @@ d:\Đồ Án\RUBIK\
 │
 └── tests/                      # Thành phần 8: Bộ kiểm thử tự động
     ├── __init__.py
+    ├── test_cube_3d.py         # Kiểm tra tích hợp mô hình 3D
     ├── test_cube_state.py      # Kiểm tra các phép xoay mặt (R, U, Sexy Move cycle)
     ├── test_validator.py       # Kiểm tra phát hiện lỗi trùng tâm, thiếu màu
     ├── test_solver.py          # Kiểm tra giải các trạng thái xáo trộn & phát hiện Flip error
